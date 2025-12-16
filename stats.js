@@ -1,124 +1,119 @@
 // stats.js
 const fetch = require('node-fetch');
-const { parse } = require('csv-parse/sync');
-
-/* ===================== CONFIG ===================== */
-
-const GOOGLE_SHEET_CSV =
-  'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEvXh5P_U89PiYbBh-yIB-jbFdBejWYEHTbLopxHo7yc4Gns77R4h4HkXMxUzFTOGaU9Jl5JimzB_A/pub?gid=0&single=true&output=csv';
-
-const MESSAGE_TEXT = 'visited you, love the look';
-const RATING_VALUE = 3;
-const PODIUM_TYPE = 4;
-
-const BETWEEN_LADIES_DELAY = 3000;
-
-/* ================================================== */
-
-async function loadLadiesFromSheet() {
-  console.log('📥 [Stats] Fetching Google Sheet CSV...');
-
-  const res = await fetch(GOOGLE_SHEET_CSV);
-  const csvText = await res.text();
-
-  const records = parse(csvText, {
-    columns: true,
-    skip_empty_lines: true,
-  });
-
-  console.log(`📊 [Stats] Loaded ${records.length} ladies`);
-  console.log('📋 [Stats] Sample:', records.slice(0, 3));
-
-  return records.map(r => ({
-    ladyId: r.ladyID?.trim(),
-    name: r.ladyName?.trim(),
-  })).filter(r => r.ladyId);
-}
-
-async function voteForLady(page, ladyId) {
-  console.log(`🗳️ [Vote] Sending vote for Lady ID ${ladyId}`);
-
-  const response = await page.request.post(
-    'https://v3.g.ladypopular.com/ranking/players.php',
-    {
-      form: {
-        action: 'vote',
-        podiumType: PODIUM_TYPE,
-        ladyId: ladyId,
-        rating: RATING_VALUE,
-      },
-    }
-  );
-
-  const json = await response.json();
-  console.log('   📝 [Vote] Response:', json);
-
-  return json;
-}
-
-async function sendMessage(page, ladyId, ladyName) {
-  console.log(`💬 [Chat] Opening chat for ${ladyName} (${ladyId})`);
-
-  await page.waitForSelector('button.message-btn', { timeout: 15000 });
-  await page.click('button.message-btn');
-
-  await page.waitForSelector('#msgArea', { timeout: 15000 });
-
-  console.log('   ✍️ [Chat] Typing message...');
-  await page.fill('#msgArea', MESSAGE_TEXT);
-
-  await page.click('#_sendMessageButton');
-
-  console.log('   ✅ [Chat] Message sent');
-}
-
-/* ===================== MAIN ===================== */
 
 module.exports = async function runStatsExtractor(page) {
-  console.log('📊 [Stats] Starting Vote + Message routine');
+  console.log("🚀 Starting Script 2: Vote + Message from Google Sheet");
 
-  const ladies = await loadLadiesFromSheet();
+  // 🔗 Your published CSV
+  const CSV_URL =
+    'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEvXh5P_U89PiYbBh-yIB-jbFdBejWYEHTbLopxHo7yc4Gns77R4h4HkXMxUzFTOGaU9Jl5JimzB_A/pub?gid=0&single=true&output=csv';
 
-  if (ladies.length === 0) {
-    console.log('❌ [Stats] No ladies found. Exiting.');
+  // --------------------------------------------------
+  // STEP 1: LOAD CSV
+  // --------------------------------------------------
+  console.log("📥 Fetching Google Sheet CSV...");
+  const csvText = await fetch(CSV_URL).then(r => r.text());
+
+  const lines = csvText.trim().split('\n');
+  const rows = lines.slice(1).map(line => {
+    const [profileID, ladyID, ladyName] = line.split(',');
+    return {
+      profileID: profileID?.trim(),
+      ladyID: ladyID?.trim(),
+      ladyName: ladyName?.trim(),
+    };
+  });
+
+  console.log(`👭 Total ladies loaded: ${rows.length}`);
+  console.log("📋 Sample row:", rows[0]);
+
+  if (rows.length === 0) {
+    console.log("❌ No data found in CSV. Exiting.");
     return;
   }
 
-  for (let i = 0; i < ladies.length; i++) {
-    const { ladyId, name } = ladies[i];
+  // --------------------------------------------------
+  // STEP 2: PROCESS EACH LADY
+  // --------------------------------------------------
+  for (let i = 0; i < rows.length; i++) {
+    const { profileID, ladyID, ladyName } = rows[i];
 
-    console.log(`\n📄 [Stats] ${i + 1}/${ladies.length} → ${name} (${ladyId})`);
+    console.log(`\n📄 Processing ${i + 1}/${rows.length}`);
+    console.log(`   👩 Name: ${ladyName}`);
+    console.log(`   🆔 Profile ID: ${profileID}`);
+    console.log(`   🎯 Lady ID: ${ladyID}`);
 
-    const profileUrl =
-      `https://v3.g.ladypopular.com/profile.php?lady_id=${ladyId}`;
-
-    console.log('🌐 [Stats] Visiting:', profileUrl);
-    await page.goto(profileUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-
-    let voteResult;
     try {
-      voteResult = await voteForLady(page, ladyId);
-    } catch (err) {
-      console.log(`❌ [Vote] Error: ${err.message}`);
-      continue;
-    }
+      // ----------------------------------------------
+      // OPEN PROFILE (USING profileID)
+      // ----------------------------------------------
+      const profileUrl = `https://v3.g.ladypopular.com/profile.php?id=${profileID}`;
+      console.log(`🌐 Opening profile: ${profileUrl}`);
 
-    if (voteResult?.status === 1) {
-      try {
-        await sendMessage(page, ladyId, name);
-      } catch (err) {
-        console.log(`❌ [Chat] Error: ${err.message}`);
+      await page.goto(profileUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      });
+
+      await page.waitForTimeout(3000);
+
+      // ----------------------------------------------
+      // SEND VOTE (NETWORK REQUEST)
+      // ----------------------------------------------
+      console.log("🗳️ Sending vote...");
+
+      const voteResponse = await page.evaluate(async ({ ladyID }) => {
+        const res = await fetch('/ajax/ranking/players.php', {
+          method: 'POST',
+          body: new URLSearchParams({
+            action: 'vote',
+            podiumType: '4',
+            ladyId: ladyID,
+            rating: '3',
+          }),
+          credentials: 'same-origin',
+        });
+        return res.json();
+      }, { ladyID });
+
+      console.log("📝 Vote response:", voteResponse);
+
+      if (voteResponse.status !== 1) {
+        console.log(`⚠️ Vote failed for ${ladyName}. Skipping message.`);
+        continue;
       }
-    } else {
-      console.log('⚠️ [Stats] Vote failed or already voted, skipping message');
+
+      console.log("✅ Vote successful.");
+
+      // ----------------------------------------------
+      // OPEN CHAT (UI ACTION)
+      // ----------------------------------------------
+      console.log("💬 Opening chat...");
+      await page.waitForSelector('.message-btn', { timeout: 15000 });
+      await page.click('.message-btn');
+
+      // ----------------------------------------------
+      // SEND MESSAGE
+      // ----------------------------------------------
+      await page.waitForSelector('#msgArea', { timeout: 15000 });
+      await page.fill('#msgArea', 'visited you, love the look');
+
+      await page.waitForSelector('#_sendMessageButton', { timeout: 15000 });
+      await page.click('#_sendMessageButton');
+
+      console.log("📨 Message sent successfully.");
+
+    } catch (err) {
+      console.log(`❌ Error processing ${ladyName}: ${err.message}`);
+      await page.screenshot({
+        path: `stats-error-${profileID}.png`,
+        fullPage: true,
+      });
     }
 
-    console.log(`⏳ [Stats] Waiting ${BETWEEN_LADIES_DELAY}ms`);
-    await page.waitForTimeout(BETWEEN_LADIES_DELAY);
+    // ⏳ Small delay to stay safe
+    await page.waitForTimeout(5000);
   }
 
-  console.log('🏁 [Stats] Vote + Message routine complete');
+  console.log("\n🏁 Script 2 complete. All rows processed.");
 };
